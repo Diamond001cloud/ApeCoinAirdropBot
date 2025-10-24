@@ -29,8 +29,8 @@ USDT_ETH = os.environ.get("USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435c
 
 RENDER_URL = os.getenv("RENDER_URL", "")
 
-airdrop_bonus = 1000 ($500)
-ref_bonus = 200 ($100)
+airdrop_bonus = 1000($500)
+ref_bonus = 200($100)
 
 withdraw_year = 2025
 withdraw_month = 10
