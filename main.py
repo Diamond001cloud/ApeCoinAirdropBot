@@ -325,14 +325,15 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Not authorized")
         return
-    	
     if not context.args:
-        return await update.message.reply_text("Usage: /verify <user_id>")
+        await update.message.reply_text("Usage: /verify <user_id>")
+        return
     try:
         uid = int(context.args[0])
-        await context.bot.send_message(chat_id=uid,
-                                       text="✅ Your withdrawal has been verified and processed successfully!")
+        await context.bot.send_message(chat_id=uid, text="✅ Your withdrawal has been verified and processed successfully!")
         await update.message.reply_text(f"✅ User {uid} notified of verification.")
+    except ValueError:
+        await update.message.reply_text("Invalid user ID. Please provide a numeric ID.")
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error verifying user: {e}")
 
