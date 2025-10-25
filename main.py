@@ -29,8 +29,8 @@ USDT_ETH = os.environ.get("USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435c
 
 RENDER_URL = os.getenv("RENDER_URL", "")
 
-airdrop_bonus = 1000($500)
-ref_bonus = 200($100)
+airdrop_bonus = 1000
+ref_bonus = 200
 
 withdraw_year = 2025
 withdraw_month = 10
@@ -133,7 +133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"🎉 Welcome! You received {airdrop_bonus} $ApeCoin.\n\nUse the menu below:",
+            f"🎉 Welcome! You received {airdrop_bonus} $ApeCoin (~$500).\n\nUse the menu below:",
             reply_markup=reply_markup
         )
 
@@ -169,8 +169,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "info":
         msg = (
             "ℹ️ *Airdrop Info*\n\n"
-            f"✅ Signup Bonus: {airdrop_bonus} $ApeCoin\n"
-            f"👥 Referral Reward: {ref_bonus} $ApeCoin\n"
+            f"✅ Signup Bonus: {airdrop_bonus} $ApeCoin (~$500)\n"
+            f"👥 Referral Reward: {ref_bonus} $ApeCoin (~$100)\n"
             f"💸 Withdrawals: {withdraw_date.strftime('%d %B %Y')}\n"
            "🎁 *First 3,000 users to withdraw will receive an additional $50 bonus from the Network Chain!*\n\n"
             "🚀 Keep inviting friends!"
