@@ -321,11 +321,12 @@ async def send_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Failed to send message: {e}")
         
         #---ADMIN VERIFY: /verify <user_id>---
-        async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-         await update.message.reply_text("🚫 Not authorized")
-		return
-		
+        await update.message.reply_text("🚫 Not authorized")
+        return
+    	
     if not context.args:
         return await update.message.reply_text("Usage: /verify <user_id>")
     try:
