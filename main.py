@@ -27,7 +27,7 @@ ETH_FEE_WALLET = os.environ.get("ETH_FEE_WALLET", "0x614d8bdc87607ed477b14f8d69f
 USDT_BNB = os.environ.get("USDT_BNB", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
 USDT_ETH = os.environ.get("USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
 
-RENDER_URL = os.getenv("RENDER_URL", "")
+RENDER_URL = os.getenv("RENDER_URL", "https://apecoinairdropbot-d170.onrender.com")
 
 airdrop_bonus = 1000
 ref_bonus = 200
@@ -335,7 +335,7 @@ async def send_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Error verifying user: {e}")
 
 # --- KEEP-ALIVE & PING ---
-RENDER_URL = "https://your-render-app-name.onrender.com"  # Replace after deployment
+RENDER_URL = "https://apecoinairdropbot-d170.onrender.com"  # Replace after deployment
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is alive and running!")
