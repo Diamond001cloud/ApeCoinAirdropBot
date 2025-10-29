@@ -27,14 +27,12 @@ ETH_FEE_WALLET = os.environ.get("ETH_FEE_WALLET", "0x614d8bdc87607ed477b14f8d69f
 USDT_BNB = os.environ.get("USDT_BNB", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
 USDT_ETH = os.environ.get("USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
 
-RENDER_URL = os.getenv("RENDER_URL", "https://apecoinairdropbot-d170.onrender.com")
-
 airdrop_bonus = 1000
 ref_bonus = 200
 
 withdraw_year = 2025
-withdraw_month = 10
-withdraw_day = 31
+withdraw_month = 11
+withdraw_day = 25
 withdraw_date = datetime.date(withdraw_year, withdraw_month, withdraw_day)
 
 # --- LOGGING ---
@@ -42,7 +40,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- DATABASE ---
-conn = sqlite3.connect("airdrop.db", check_same_thread=False)
+DB_PATH = os.getenv("DB_PATH", "/app/data/airdrop.db")
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
@@ -337,22 +336,6 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error verifying user: {e}")
 
-# --- KEEP-ALIVE & PING ---
-RENDER_URL = "https://apecoinairdropbot-d170.onrender.com"  # Replace after deployment
-
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is alive and running!")
-
-async def keep_alive():
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(RENDER_URL) as resp:
-                    print(f"🔄 Keep-alive ping: {resp.status}")
-        except Exception as e:
-            print(f"⚠️ Keep-alive error: {e}")
-        await asyncio.sleep(300)
-
 # --- SETUP BOT ---
 app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
@@ -361,42 +344,35 @@ app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_flow))
 app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("broadcast", broadcast))
-app.add_handler(CommandHandler("ping", ping))
+add_handler(CommandHandler("send", send))
+add_handler(CommandHandler("verify", verify))
 
 # --- RUN BOT ---
-async def notify_admin(bot, message):
-    try:
-        await bot.send_message(chat_id=ADMIN_ID, text=message)
-    except:
-        pass
-
-def run_bot():
-    while True:
-        try:
-            print("🤖 Bot is starting...")
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.set_event_loop(asyncio.new_event_loop())
-
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(notify_admin(app.bot, "✅ Bot started successfully and is now online."))
-            loop.create_task(keep_alive())
-            app.run_polling()
-        except Exception as e:
-            error_message = f"[{datetime.datetime.now()}] Error: {e}\n{traceback.format_exc()}\n\n"
-            with open("bot_errors.log", "a", encoding="utf-8") as f:
-                f.write(error_message)
-            try:
-                loop = asyncio.get_event_loop()
-                loop.run_until_complete(notify_admin(app.bot, f"⚠️ Bot crashed with error:\n{e}"))
-            except:
-                pass
-            print("⚠️ Bot crashed! Restarting in 10 seconds...")
-            time.sleep(10)
-        else:
-            print("✅ Bot stopped gracefully.")
-            break
+async def main():
+    """Start the bot and polling."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    # Build application
+    app = Application.builder().token(TOKEN).build()
+    
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_flow))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("send", send_user))
+    app.add_handler(CommandHandler("verify", verify))
+    
+    # Start polling
+    logger.info("🤖 Bot is starting polling...")
+    await app.run_polling(drop_pending_updates=True)
+    logger.info("✅ Bot stopped.")
 
 if __name__ == "__main__":
-    run_bot()
+    asyncio.run(main())
