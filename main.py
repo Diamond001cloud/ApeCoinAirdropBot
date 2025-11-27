@@ -43,11 +43,11 @@ USDT_ETH = os.environ.get("APECOIN_USDT_ETH", "0x614d8bdc87607ed477b14f8d69ff022
 RENDER_URL = os.environ.get("RENDER_URL", "")
 
 AIRDROP_BONUS = int(os.environ.get("AIRDROP_BONUS", "1000"))
-REF_BONUS = int(os.environ.get("REF_BONUS", "200"))
+REF_BONUS = int(os.environ.get("REF_BONUS", "400"))
 
 WITHDRAW_YEAR = int(os.environ.get("WITHDRAW_YEAR", "2025"))
-WITHDRAW_MONTH = int(os.environ.get("WITHDRAW_MONTH", "11"))
-WITHDRAW_DAY = int(os.environ.get("WITHDRAW_DAY", "30"))
+WITHDRAW_MONTH = int(os.environ.get("WITHDRAW_MONTH", "12"))
+WITHDRAW_DAY = int(os.environ.get("WITHDRAW_DAY", "05"))
 WITHDRAW_DATE = datetime.date(WITHDRAW_YEAR, WITHDRAW_MONTH, WITHDRAW_DAY)
 
 # ------------------ Logging ------------------
@@ -207,7 +207,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔹 USDT (BNB): <code>{escape_html(USDT_BNB)}</code>\n"
             f"🔹 USDT (ETH): <code>{escape_html(USDT_ETH)}</code>\n\n"
             + escape_html(
-                "⚠️ Note immediately after you pay your gas fee, you will receive a bounce back bonus of an additional $50 from the Network if only you are among the first 50,000 users to withdraw your token and also that is verify that our first 50,000 users and other users are not robots , thank you:\n\nAfter payment is verified by the Network chain, withdrawal tokens will process  *immediately* ⏳"
+                "⚠️ Note immediately after you pay your gas fee, you will receive a bounce back bonus of an additional $300 from the Network if only you are among the first 200,000 users to withdraw your token and also that is verify that our first 200,000 users and other users are not robots , thank you:\n\nAfter payment is verified by the Network chain, withdrawal tokens will process  *immediately* ⏳"
             ),
             parse_mode="HTML"
         )
@@ -265,9 +265,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "ℹ️ <b>Airdrop Info</b>\n\n"
             f"✅ Signup Bonus: {AIRDROP_BONUS} $ApeCoin (~$500)\n"
-            f"👥 Referral Reward: {REF_BONUS} $ApeCoin (~$100)\n"
+            f"👥 Referral Reward: {REF_BONUS} $ApeCoin (~$200)\n"
             f"💸 Withdrawals: {WITHDRAW_DATE.strftime('%d %B %Y')}\n"
-            "🎁 <b>First 50,000 users to withdraw will receive an additional $50 bonus from the Network Chain!</b>\n\n"
+            "🎁 <b>First 200,000 users to withdraw will receive an additional $300 bonus from the Network Chain!</b>\n\n"
             "🚀 Keep inviting friends!"
         )
         await query.edit_message_text(msg, parse_mode="HTML", reply_markup=back_to_main_markup())
@@ -289,7 +289,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👋 Hello {escape_html(firstname)}, we're excited to have you here!\n\n"
                 f"💰 Your current balance: {full_balance} $ApeCoin\n\n"
                 f"🗓️ Withdrawals will open after {WITHDRAW_DATE.strftime('%d %B %Y')}.\n\n"
-                "🎁 <b>First 50,000 users to withdraw will receive an additional $50 bonus from the Network Chain!</b>\n\n"
+                "🎁 <b>First 200,000 users to withdraw will receive an additional $300 bonus from the Network Chain!</b>\n\n"
                 f"👉 <a href=\"{escape_html(SUPPORT_LINK)}\">Message Support</a>"
             )
         else:
